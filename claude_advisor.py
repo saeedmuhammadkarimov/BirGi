@@ -42,6 +42,12 @@ Signals to watch:
 - Volume vs its SMA20 (conviction)
 - ATR (volatility — size positions inversely)
 
+If recent_decisions is present, treat it as your own track record on this symbol.
+Each item shows what you decided, at what price, and how the price moved since.
+Look for patterns you got wrong (e.g. BUY at $60k while trend was down, price now
+lower) and adjust — do not blindly repeat losing biases. Also do not over-trade:
+if you were recently in a position, HOLD is often the right answer.
+
 Rules:
 - Prefer HOLD when signal is weak or ambiguous. Confidence < 0.7 should almost always be HOLD.
 - Never suggest a position larger than the caller's max_position_usdt.

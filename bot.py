@@ -11,6 +11,7 @@ from pathlib import Path
 from binance_client import BinanceTestnet
 from claude_advisor import ClaudeAdvisor, Decision
 from config import Settings, load_settings
+from memory import load_recent_decisions
 from news_client import NewsClient, infer_currency_code
 
 
@@ -70,8 +71,14 @@ def run_once(
         except Exception as exc:
             print(f"  news fetch failed (continuing without): {exc!r}")
 
+    memory = load_recent_decisions(DECISIONS_LOG, snapshot.price, settings.memory_depth)
+    if memory:
+        print(f"  loaded {len(memory)} past decisions into memory")
+
     print("  asking Claude…")
-    decision = advisor.decide(snapshot, settings.max_position_usdt, news=news)
+    decision = advisor.decide(
+        snapshot, settings.max_position_usdt, news=news, memory=memory
+    )
     print(
         f"  decision: {decision.action} "
         f"size={decision.size_usdt} conf={decision.confidence:.2f} "
