@@ -20,6 +20,9 @@ class Settings:
     claude_model: str
     cryptopanic_token: str
     memory_depth: int
+    stop_loss_pct: float
+    take_profit_pct: float
+    trailing_stop_pct: float
 
 
 def _required(name: str) -> str:
@@ -56,4 +59,7 @@ def load_settings() -> Settings:
         claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5"),
         cryptopanic_token=os.getenv("CRYPTOPANIC_TOKEN", "").strip(),
         memory_depth=int(os.getenv("MEMORY_DEPTH", "10")),
+        stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "3.0")),
+        take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "6.0")),
+        trailing_stop_pct=float(os.getenv("TRAILING_STOP_PCT", "0")),
     )

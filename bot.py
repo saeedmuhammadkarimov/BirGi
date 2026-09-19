@@ -13,11 +13,14 @@ from claude_advisor import ClaudeAdvisor, Decision
 from config import Settings, load_settings
 from memory import load_recent_decisions
 from news_client import NewsClient, infer_currency_code
+from positions import PositionLedger, check_risk
 
 
 LOG_DIR = Path(__file__).parent / "logs"
+STATE_DIR = Path(__file__).parent / "state"
 DECISIONS_LOG = LOG_DIR / "decisions.jsonl"
 TRADES_LOG = LOG_DIR / "trades.jsonl"
+POSITIONS_FILE = STATE_DIR / "positions.json"
 
 
 def _now_iso() -> str:
@@ -51,6 +54,7 @@ def run_once(
     binance: BinanceTestnet,
     advisor: ClaudeAdvisor,
     limiter: RateLimiter,
+    ledger: PositionLedger,
     dry_run: bool,
     news_client: NewsClient | None = None,
 ) -> None:
@@ -61,6 +65,28 @@ def run_once(
         f"{snapshot.base_asset}={snapshot.base_balance} "
         f"{snapshot.quote_asset}={snapshot.quote_balance}"
     )
+
+    ledger.update_peak(settings.symbol, snapshot.price)
+    pos = ledger.get(settings.symbol)
+    if pos.is_open():
+        print(
+            f"  open position: qty={pos.base_qty:.6f} entry={pos.avg_entry:.2f} "
+            f"peak={pos.peak_since_entry:.2f} pnl={pos.pnl_pct(snapshot.price):+.2f}%"
+        )
+        risk = check_risk(
+            pos,
+            snapshot.price,
+            settings.stop_loss_pct,
+            settings.take_profit_pct,
+            settings.trailing_stop_pct,
+        )
+        if risk.should_close:
+            print(f"  RISK EXIT: {risk.reason}")
+            if not dry_run:
+                _close_position(binance, ledger, settings.symbol, pos.base_qty, snapshot.price, risk.reason)
+            else:
+                print("  dry-run: skipping forced close")
+            return
 
     news: list[dict] | None = None
     if news_client is not None:
@@ -109,7 +135,7 @@ def run_once(
         print("  dry-run: would execute but skipping")
         return
 
-    order = _execute(binance, snapshot.symbol, decision)
+    order = _execute(binance, snapshot.symbol, decision, ledger, snapshot.price)
     limiter.record()
     print(f"  order executed: id={order.get('orderId')} status={order.get('status')}")
     _append_jsonl(
@@ -151,14 +177,58 @@ def _should_trade(
     return True, ""
 
 
-def _execute(binance: BinanceTestnet, symbol: str, decision: Decision) -> dict:
+def _execute(
+    binance: BinanceTestnet,
+    symbol: str,
+    decision: Decision,
+    ledger: PositionLedger,
+    reference_price: float,
+) -> dict:
     if decision.action == "BUY":
-        return binance.market_buy_quote(symbol, decision.size_usdt)
+        order = binance.market_buy_quote(symbol, decision.size_usdt)
+        qty = _filled_base_qty(order, decision.size_usdt / reference_price)
+        ledger.record_buy(symbol, qty, reference_price)
+        return order
     if decision.action == "SELL":
         price = binance.get_price(symbol)
         base_amount = decision.size_usdt / price
-        return binance.market_sell_base(symbol, base_amount)
+        order = binance.market_sell_base(symbol, base_amount)
+        qty = _filled_base_qty(order, base_amount)
+        ledger.record_sell(symbol, qty)
+        return order
     raise RuntimeError(f"unexpected action {decision.action}")
+
+
+def _close_position(
+    binance: BinanceTestnet,
+    ledger: PositionLedger,
+    symbol: str,
+    base_qty: float,
+    reference_price: float,
+    reason: str,
+) -> None:
+    order = binance.market_sell_base(symbol, base_qty)
+    filled = _filled_base_qty(order, base_qty)
+    ledger.record_sell(symbol, filled)
+    _append_jsonl(
+        TRADES_LOG,
+        {
+            "ts": _now_iso(),
+            "symbol": symbol,
+            "action": "SELL",
+            "requested_usdt": base_qty * reference_price,
+            "confidence": 1.0,
+            "reason": f"forced_close: {reason}",
+            "order": order,
+        },
+    )
+
+
+def _filled_base_qty(order: dict, fallback_qty: float) -> float:
+    try:
+        return float(order.get("executedQty") or fallback_qty)
+    except (TypeError, ValueError):
+        return fallback_qty
 
 
 def main() -> None:
@@ -172,21 +242,24 @@ def main() -> None:
     print(
         f"config: symbol={settings.symbol} interval={settings.interval_minutes}m "
         f"max_pos=${settings.max_position_usdt} min_conf={settings.min_confidence} "
-        f"rate={settings.max_trades_per_hour}/h dry_run={dry_run}"
+        f"rate={settings.max_trades_per_hour}/h dry_run={dry_run} "
+        f"sl={settings.stop_loss_pct}% tp={settings.take_profit_pct}% "
+        f"trail={settings.trailing_stop_pct}%"
     )
 
     binance = BinanceTestnet(settings.binance_api_key, settings.binance_api_secret)
     advisor = ClaudeAdvisor(settings.anthropic_api_key, settings.claude_model)
     limiter = RateLimiter(settings.max_trades_per_hour)
+    ledger = PositionLedger(POSITIONS_FILE)
     news_client = NewsClient(settings.cryptopanic_token) if settings.cryptopanic_token else None
 
     if args.mode == "once":
-        run_once(settings, binance, advisor, limiter, dry_run, news_client)
+        run_once(settings, binance, advisor, limiter, ledger, dry_run, news_client)
         return
 
     while True:
         try:
-            run_once(settings, binance, advisor, limiter, dry_run, news_client)
+            run_once(settings, binance, advisor, limiter, ledger, dry_run, news_client)
         except Exception as exc:
             print(f"[{_now_iso()}] iteration failed: {exc!r}")
         sleep_s = settings.interval_minutes * 60

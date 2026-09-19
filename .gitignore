@@ -6,4 +6,6 @@ __pycache__/
 *.pyo
 logs/*
 !logs/.gitkeep
+state/*
+!state/.gitkeep
 .DS_Store
