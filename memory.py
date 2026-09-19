@@ -15,19 +15,32 @@ def load_recent_decisions(
     log_path: Path,
     current_price: float,
     depth: int,
+    symbol: str | None = None,
 ) -> list[dict]:
+    """Return up to `depth` most-recent decisions.
+
+    If `symbol` is given, only matching entries count toward `depth` — this
+    keeps the memory relevant when the bot trades multiple pairs.
+    """
     if depth <= 0 or not log_path.exists():
         return []
 
     lines = log_path.read_text(encoding="utf-8").splitlines()
-    recent = lines[-depth:]
 
-    out: list[dict] = []
-    for line in recent:
+    matched: list[dict] = []
+    for line in reversed(lines):
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if symbol is not None and entry.get("symbol") != symbol:
+            continue
+        matched.append(entry)
+        if len(matched) >= depth:
+            break
+
+    out: list[dict] = []
+    for entry in reversed(matched):
         decision = entry.get("decision", {}) or {}
         price_then = entry.get("price")
         if price_then is None or not isinstance(price_then, (int, float)):

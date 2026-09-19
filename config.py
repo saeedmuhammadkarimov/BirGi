@@ -11,7 +11,7 @@ class Settings:
     binance_api_key: str
     binance_api_secret: str
     anthropic_api_key: str
-    symbol: str
+    symbols: list[str]
     interval_minutes: int
     max_position_usdt: float
     min_confidence: float
@@ -44,13 +44,27 @@ def _bool(name: str, default: bool) -> bool:
     return default
 
 
+def _parse_symbols() -> list[str]:
+    raw = os.getenv("SYMBOLS", "").strip()
+    if not raw:
+        raw = os.getenv("SYMBOL", "BTCUSDT").strip()
+    parts = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    seen: set[str] = set()
+    unique: list[str] = []
+    for s in parts:
+        if s not in seen:
+            seen.add(s)
+            unique.append(s)
+    return unique
+
+
 def load_settings() -> Settings:
     load_dotenv()
     return Settings(
         binance_api_key=_required("BINANCE_API_KEY"),
         binance_api_secret=_required("BINANCE_API_SECRET"),
         anthropic_api_key=_required("ANTHROPIC_API_KEY"),
-        symbol=os.getenv("SYMBOL", "BTCUSDT").upper(),
+        symbols=_parse_symbols(),
         interval_minutes=int(os.getenv("INTERVAL_MINUTES", "15")),
         max_position_usdt=float(os.getenv("MAX_POSITION_USDT", "200")),
         min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.7")),

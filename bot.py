@@ -50,6 +50,7 @@ class RateLimiter:
 
 
 def run_once(
+    symbol: str,
     settings: Settings,
     binance: BinanceTestnet,
     advisor: ClaudeAdvisor,
@@ -58,16 +59,16 @@ def run_once(
     dry_run: bool,
     news_client: NewsClient | None = None,
 ) -> None:
-    print(f"[{_now_iso()}] fetching snapshot for {settings.symbol}")
-    snapshot = binance.get_snapshot(settings.symbol)
+    print(f"[{_now_iso()}] {symbol}: fetching snapshot")
+    snapshot = binance.get_snapshot(symbol)
     print(
         f"  price={snapshot.price} "
         f"{snapshot.base_asset}={snapshot.base_balance} "
         f"{snapshot.quote_asset}={snapshot.quote_balance}"
     )
 
-    ledger.update_peak(settings.symbol, snapshot.price)
-    pos = ledger.get(settings.symbol)
+    ledger.update_peak(symbol, snapshot.price)
+    pos = ledger.get(symbol)
     if pos.is_open():
         print(
             f"  open position: qty={pos.base_qty:.6f} entry={pos.avg_entry:.2f} "
@@ -83,7 +84,7 @@ def run_once(
         if risk.should_close:
             print(f"  RISK EXIT: {risk.reason}")
             if not dry_run:
-                _close_position(binance, ledger, settings.symbol, pos.base_qty, snapshot.price, risk.reason)
+                _close_position(binance, ledger, symbol, pos.base_qty, snapshot.price, risk.reason)
             else:
                 print("  dry-run: skipping forced close")
             return
@@ -91,13 +92,15 @@ def run_once(
     news: list[dict] | None = None
     if news_client is not None:
         try:
-            currency = infer_currency_code(settings.symbol)
+            currency = infer_currency_code(symbol)
             news = news_client.fetch(currency, limit=8)
             print(f"  fetched {len(news)} news headlines for {currency}")
         except Exception as exc:
             print(f"  news fetch failed (continuing without): {exc!r}")
 
-    memory = load_recent_decisions(DECISIONS_LOG, snapshot.price, settings.memory_depth)
+    memory = load_recent_decisions(
+        DECISIONS_LOG, snapshot.price, settings.memory_depth, symbol=symbol
+    )
     if memory:
         print(f"  loaded {len(memory)} past decisions into memory")
 
@@ -115,7 +118,7 @@ def run_once(
         DECISIONS_LOG,
         {
             "ts": _now_iso(),
-            "symbol": settings.symbol,
+            "symbol": symbol,
             "price": snapshot.price,
             "balances": {
                 snapshot.base_asset: snapshot.base_balance,
@@ -135,14 +138,14 @@ def run_once(
         print("  dry-run: would execute but skipping")
         return
 
-    order = _execute(binance, snapshot.symbol, decision, ledger, snapshot.price)
+    order = _execute(binance, symbol, decision, ledger, snapshot.price)
     limiter.record()
     print(f"  order executed: id={order.get('orderId')} status={order.get('status')}")
     _append_jsonl(
         TRADES_LOG,
         {
             "ts": _now_iso(),
-            "symbol": settings.symbol,
+            "symbol": symbol,
             "action": decision.action,
             "requested_usdt": decision.size_usdt,
             "confidence": decision.confidence,
@@ -240,7 +243,7 @@ def main() -> None:
     settings = load_settings()
     dry_run = args.dry_run or settings.dry_run
     print(
-        f"config: symbol={settings.symbol} interval={settings.interval_minutes}m "
+        f"config: symbols={','.join(settings.symbols)} interval={settings.interval_minutes}m "
         f"max_pos=${settings.max_position_usdt} min_conf={settings.min_confidence} "
         f"rate={settings.max_trades_per_hour}/h dry_run={dry_run} "
         f"sl={settings.stop_loss_pct}% tp={settings.take_profit_pct}% "
@@ -253,15 +256,19 @@ def main() -> None:
     ledger = PositionLedger(POSITIONS_FILE)
     news_client = NewsClient(settings.cryptopanic_token) if settings.cryptopanic_token else None
 
+    def _cycle_symbols() -> None:
+        for symbol in settings.symbols:
+            try:
+                run_once(symbol, settings, binance, advisor, limiter, ledger, dry_run, news_client)
+            except Exception as exc:
+                print(f"[{_now_iso()}] {symbol}: iteration failed: {exc!r}")
+
     if args.mode == "once":
-        run_once(settings, binance, advisor, limiter, ledger, dry_run, news_client)
+        _cycle_symbols()
         return
 
     while True:
-        try:
-            run_once(settings, binance, advisor, limiter, ledger, dry_run, news_client)
-        except Exception as exc:
-            print(f"[{_now_iso()}] iteration failed: {exc!r}")
+        _cycle_symbols()
         sleep_s = settings.interval_minutes * 60
         print(f"sleeping {sleep_s}s")
         time.sleep(sleep_s)
