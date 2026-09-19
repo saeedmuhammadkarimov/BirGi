@@ -6,6 +6,7 @@ from typing import Literal
 
 from anthropic import Anthropic
 
+import indicators
 from binance_client import MarketSnapshot
 
 
@@ -23,16 +24,30 @@ class Decision:
 
 SYSTEM_PROMPT = """You are a cautious crypto trading advisor operating on a Binance TESTNET account.
 Every dollar here is virtual, but treat the exercise seriously: reason from the data,
-not from vibes. You will receive a market snapshot for one trading pair and a small
-account state. Return exactly one decision.
+not from vibes. You will receive an indicator snapshot at three timeframes (1h, 15m, 5m),
+optional news headlines, optional recent decision history, and account state.
+Return exactly one decision.
+
+How to reason:
+- The 1h timeframe sets the dominant trend. Don't fight it.
+- The 15m timeframe is your setup timeframe.
+- The 5m timeframe is your trigger.
+- Alignment across timeframes = higher confidence. Divergence = HOLD.
+
+Signals to watch:
+- Price vs EMA20/50/200 (trend regime)
+- RSI extremes (>70 overbought, <30 oversold) + divergence
+- MACD histogram sign + slope
+- Bollinger squeeze / breakout
+- Volume vs its SMA20 (conviction)
+- ATR (volatility — size positions inversely)
 
 Rules:
 - Prefer HOLD when signal is weak or ambiguous. Confidence < 0.7 should almost always be HOLD.
 - Never suggest a position larger than the caller's max_position_usdt.
-- Only suggest BUY if quote (USDT) balance can cover it.
+- Only suggest BUY if quote balance can cover it.
 - Only suggest SELL if base balance is non-trivial.
-- Base your reasoning on the recent candles (trend, volatility, momentum) — do not invent news.
-- Keep the reason under 300 characters. Be specific about what you saw in the data.
+- Keep the reason under 400 characters. Be specific: cite indicator names and values you used.
 """
 
 
@@ -59,15 +74,25 @@ def _tool_schema() -> dict:
                 },
                 "reason": {
                     "type": "string",
-                    "description": "Short, specific justification grounded in the provided candles.",
+                    "description": "Short, specific justification. Cite indicators (RSI value, MACD hist, EMA relationship, etc).",
                 },
             },
         },
     }
 
 
-def _snapshot_payload(snapshot: MarketSnapshot, max_position_usdt: float) -> dict:
-    return {
+def _build_payload(
+    snapshot: MarketSnapshot,
+    max_position_usdt: float,
+    news: list[dict] | None = None,
+    memory: list[dict] | None = None,
+) -> dict:
+    per_tf = []
+    for tf, candles in snapshot.candles_by_tf.items():
+        snap = indicators.compute(candles, tf)
+        per_tf.append(snap.to_compact_dict())
+
+    payload = {
         "symbol": snapshot.symbol,
         "current_price": snapshot.price,
         "base_asset": snapshot.base_asset,
@@ -77,18 +102,13 @@ def _snapshot_payload(snapshot: MarketSnapshot, max_position_usdt: float) -> dic
             snapshot.quote_asset: snapshot.quote_balance,
         },
         "max_position_usdt": max_position_usdt,
-        "candles_15m": [
-            {
-                "t": c.open_time_ms,
-                "o": c.open,
-                "h": c.high,
-                "l": c.low,
-                "c": c.close,
-                "v": c.volume,
-            }
-            for c in snapshot.candles_15m
-        ],
+        "indicators_by_tf": per_tf,
     }
+    if news:
+        payload["recent_news"] = news
+    if memory:
+        payload["recent_decisions"] = memory
+    return payload
 
 
 class ClaudeAdvisor:
@@ -96,8 +116,14 @@ class ClaudeAdvisor:
         self.client = Anthropic(api_key=api_key)
         self.model = model
 
-    def decide(self, snapshot: MarketSnapshot, max_position_usdt: float) -> Decision:
-        payload = _snapshot_payload(snapshot, max_position_usdt)
+    def decide(
+        self,
+        snapshot: MarketSnapshot,
+        max_position_usdt: float,
+        news: list[dict] | None = None,
+        memory: list[dict] | None = None,
+    ) -> Decision:
+        payload = _build_payload(snapshot, max_position_usdt, news=news, memory=memory)
         tool = _tool_schema()
         message = self.client.messages.create(
             model=self.model,

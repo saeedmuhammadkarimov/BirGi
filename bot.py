@@ -137,8 +137,8 @@ def _execute(binance: BinanceTestnet, symbol: str, decision: Decision) -> dict:
     if decision.action == "BUY":
         return binance.market_buy_quote(symbol, decision.size_usdt)
     if decision.action == "SELL":
-        snapshot = binance.get_snapshot(symbol, candles=1)
-        base_amount = decision.size_usdt / snapshot.price
+        price = binance.get_price(symbol)
+        base_amount = decision.size_usdt / price
         return binance.market_sell_base(symbol, base_amount)
     raise RuntimeError(f"unexpected action {decision.action}")
 
