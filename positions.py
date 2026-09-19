@@ -33,6 +33,7 @@ class Position:
     avg_entry: float = 0.0
     peak_since_entry: float = 0.0
     opened_at: str = ""
+    atr_at_entry: float = 0.0  # 15m ATR captured at first BUY, kept for dynamic SL/TP
 
     def is_open(self) -> bool:
         return self.base_qty > 1e-12
@@ -48,6 +49,7 @@ class Position:
             "avg_entry": self.avg_entry,
             "peak_since_entry": self.peak_since_entry,
             "opened_at": self.opened_at,
+            "atr_at_entry": self.atr_at_entry,
         }
 
     @classmethod
@@ -57,6 +59,7 @@ class Position:
             avg_entry=float(data.get("avg_entry", 0.0)),
             peak_since_entry=float(data.get("peak_since_entry", 0.0)),
             opened_at=str(data.get("opened_at", "")),
+            atr_at_entry=float(data.get("atr_at_entry", 0.0)),
         )
 
 
@@ -83,7 +86,13 @@ class PositionLedger:
     def get(self, symbol: str) -> Position:
         return self._data.get(symbol, Position())
 
-    def record_buy(self, symbol: str, base_qty: float, price: float) -> None:
+    def record_buy(
+        self,
+        symbol: str,
+        base_qty: float,
+        price: float,
+        atr_at_entry: float = 0.0,
+    ) -> None:
         if base_qty <= 0 or price <= 0:
             return
         pos = self._data.get(symbol, Position())
@@ -94,6 +103,10 @@ class PositionLedger:
         pos.peak_since_entry = max(pos.peak_since_entry, price)
         if not pos.opened_at:
             pos.opened_at = datetime.now(timezone.utc).isoformat()
+        # ATR captured only on the first BUY of a fresh position — averaging
+        # ATR across adds would mix regimes and break the risk envelope.
+        if pos.atr_at_entry <= 0 and atr_at_entry > 0:
+            pos.atr_at_entry = atr_at_entry
         self._data[symbol] = pos
         self._save()
 
@@ -128,12 +141,40 @@ def check_risk(
     stop_loss_pct: float,
     take_profit_pct: float,
     trailing_stop_pct: float,
+    stop_loss_atr: float = 0.0,
+    take_profit_atr: float = 0.0,
 ) -> RiskDecision:
-    """Decide whether an open position should be force-closed."""
+    """Decide whether an open position should be force-closed.
+
+    ATR-based checks fire first when they're configured and the position has
+    an ATR-at-entry recorded — they adapt to the symbol's own noise instead
+    of using a one-size-fits-all percentage. Fixed % checks still run as a
+    safety net (in case ATR is unknown, e.g. positions from before this
+    feature landed).
+    """
     if not pos.is_open() or pos.avg_entry <= 0:
         return RiskDecision(should_close=False)
 
     pnl = pos.pnl_pct(price)
+
+    if pos.atr_at_entry > 0:
+        if stop_loss_atr > 0:
+            stop_distance = pos.atr_at_entry * stop_loss_atr
+            if price <= pos.avg_entry - stop_distance:
+                return RiskDecision(
+                    True,
+                    f"ATR stop-loss: price {price:.2f} <= entry {pos.avg_entry:.2f} "
+                    f"- {stop_loss_atr}xATR ({stop_distance:.2f}); pnl {pnl:.2f}%",
+                )
+        if take_profit_atr > 0:
+            take_distance = pos.atr_at_entry * take_profit_atr
+            if price >= pos.avg_entry + take_distance:
+                return RiskDecision(
+                    True,
+                    f"ATR take-profit: price {price:.2f} >= entry {pos.avg_entry:.2f} "
+                    f"+ {take_profit_atr}xATR ({take_distance:.2f}); pnl {pnl:.2f}%",
+                )
+
     if stop_loss_pct > 0 and pnl <= -abs(stop_loss_pct):
         return RiskDecision(True, f"stop-loss hit: pnl {pnl:.2f}% <= -{stop_loss_pct}%")
     if take_profit_pct > 0 and pnl >= take_profit_pct:

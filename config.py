@@ -23,6 +23,8 @@ class Settings:
     stop_loss_pct: float
     take_profit_pct: float
     trailing_stop_pct: float
+    stop_loss_atr: float
+    take_profit_atr: float
     telegram_bot_token: str
     telegram_chat_id: str
 
@@ -78,6 +80,8 @@ def load_settings() -> Settings:
         stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "3.0")),
         take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "6.0")),
         trailing_stop_pct=float(os.getenv("TRAILING_STOP_PCT", "0")),
+        stop_loss_atr=float(os.getenv("STOP_LOSS_ATR", "2.0")),
+        take_profit_atr=float(os.getenv("TAKE_PROFIT_ATR", "4.0")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip(),
     )

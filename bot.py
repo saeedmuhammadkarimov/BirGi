@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+import indicators
 from binance_client import BinanceTestnet, avg_fill_price
 from claude_advisor import ClaudeAdvisor, Decision, usage_cost_usd
 from config import Settings, load_settings
@@ -88,6 +89,8 @@ def run_once(
             settings.stop_loss_pct,
             settings.take_profit_pct,
             settings.trailing_stop_pct,
+            settings.stop_loss_atr,
+            settings.take_profit_atr,
         )
         if risk.should_close:
             print(f"  RISK EXIT: {risk.reason}")
@@ -162,7 +165,7 @@ def run_once(
         print("  dry-run: would execute but skipping")
         return
 
-    order = _execute(binance, symbol, decision, ledger, snapshot.price)
+    order = _execute(binance, symbol, decision, ledger, snapshot)
     limiter.record()
     print(f"  order executed: id={order.get('orderId')} status={order.get('status')}")
     _append_jsonl(
@@ -220,13 +223,15 @@ def _execute(
     symbol: str,
     decision: Decision,
     ledger: PositionLedger,
-    reference_price: float,
+    snapshot,
 ) -> dict:
+    reference_price = snapshot.price
     if decision.action == "BUY":
         order = binance.market_buy_quote(symbol, decision.size_usdt)
         qty = _filled_base_qty(order, decision.size_usdt / reference_price)
         fill_price = avg_fill_price(order, reference_price)
-        ledger.record_buy(symbol, qty, fill_price)
+        atr = _snapshot_atr_15m(snapshot)
+        ledger.record_buy(symbol, qty, fill_price, atr_at_entry=atr)
         return order
     if decision.action == "SELL":
         price = binance.get_price(symbol)
@@ -236,6 +241,16 @@ def _execute(
         ledger.record_sell(symbol, qty)
         return order
     raise RuntimeError(f"unexpected action {decision.action}")
+
+
+def _snapshot_atr_15m(snapshot) -> float:
+    candles = snapshot.candles_by_tf.get("15m")
+    if not candles or len(candles) < 20:
+        return 0.0
+    try:
+        return indicators.compute(candles, "15m").atr_14
+    except Exception:
+        return 0.0
 
 
 def _close_position(
