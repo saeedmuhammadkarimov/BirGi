@@ -81,14 +81,29 @@ python bot.py once --dry-run
 ```
 bot.py              — main loop + CLI
 backtest.py         — прогон стратегии на исторических свечах
+dashboard.py        — CLI-статус: позиции, решения, сделки, PnL, cost
 config.py           — загрузка .env
 binance_client.py   — обёртка над Binance testnet (мульти-таймфрейм)
 indicators.py       — технические индикаторы (RSI, EMA, MACD, BB, ATR, Stoch)
-news_client.py     — CryptoPanic API (опционально)
+news_client.py      — новости из CoinDesk + Cointelegraph RSS (без ключа)
 memory.py           — прошлые решения с реализованным PnL
-claude_advisor.py   — обёртка над Claude API + system prompt
-logs/               — trades.jsonl, decisions.jsonl
+positions.py        — леджер позиций + SL/TP/trailing (% и ATR-based)
+notifier.py         — Telegram-уведомления
+claude_advisor.py   — обёртка над Claude API + system prompt + caching
+logs/               — decisions.jsonl (все решения + usage/cost), trades.jsonl
+state/              — positions.json (леджер cost basis)
 ```
+
+## Статус-дашборд
+
+```bash
+python dashboard.py           # всё, последние 10 записей
+python dashboard.py --tail 30 # последние 30 решений и сделок
+```
+
+Показывает: открытые позиции с ATR-at-entry, последние решения Claude,
+исполненные сделки, оценку realized PnL, распределение BUY/SELL/HOLD по
+парам, суммарные токены и стоимость Claude API + cache hit rate.
 
 ## Бэктест
 
