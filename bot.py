@@ -282,7 +282,7 @@ def main() -> None:
     advisor = ClaudeAdvisor(settings.anthropic_api_key, settings.claude_model)
     limiter = RateLimiter(settings.max_trades_per_hour)
     ledger = PositionLedger(POSITIONS_FILE)
-    news_client = NewsClient(settings.cryptopanic_token) if settings.cryptopanic_token else None
+    news_client = NewsClient() if settings.news_enabled else None
     notifier: TelegramNotifier | None = None
     if settings.telegram_bot_token and settings.telegram_chat_id:
         notifier = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
