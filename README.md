@@ -5,14 +5,18 @@ Claude что делать, исполняет сделку на **testnet** (д
 
 ## Что делает бот
 
-1. Раз в N минут запрашивает у Binance свечи и текущую цену по выбранной паре
-   (по умолчанию `BTCUSDT`).
-2. Отправляет эти данные в Claude API вместе с текущим балансом на testnet.
-3. Claude возвращает структурированное решение: `BUY` / `SELL` / `HOLD`,
-   размер позиции, обоснование, уверенность.
-4. Если уверенность выше порога и есть свободные средства/позиция —
-   бот исполняет market-ордер на testnet.
-5. Всё логируется в `logs/trades.jsonl`.
+1. Раз в N минут запрашивает свечи 1h/15m/5m по выбранной паре (по умолчанию `BTCUSDT`).
+2. Локально считает индикаторы (RSI, EMA20/50/200, MACD, Bollinger, ATR,
+   Stochastic, volume vs SMA20) на каждом таймфрейме.
+3. Опционально: тянет последние заголовки CryptoPanic по монете.
+4. Читает последние N собственных решений с логом (кто что предсказал и как
+   потом двинулась цена) — это "память" бота.
+5. Всё это (компактный JSON) отправляется в Claude API. Claude возвращает
+   структурированное решение `BUY`/`SELL`/`HOLD`, размер позиции, обоснование
+   и уверенность.
+6. Если уверенность выше порога, лимиты не превышены и есть средства —
+   исполняется market-ордер на testnet.
+7. Всё пишется в `logs/decisions.jsonl` и `logs/trades.jsonl`.
 
 ## Что нужно, чтобы запустить
 
@@ -76,11 +80,29 @@ python bot.py once --dry-run
 
 ```
 bot.py              — main loop + CLI
+backtest.py         — прогон стратегии на исторических свечах
 config.py           — загрузка .env
-binance_client.py   — обёртка над Binance testnet
-claude_advisor.py   — обёртка над Claude API
+binance_client.py   — обёртка над Binance testnet (мульти-таймфрейм)
+indicators.py       — технические индикаторы (RSI, EMA, MACD, BB, ATR, Stoch)
+news_client.py     — CryptoPanic API (опционально)
+memory.py           — прошлые решения с реализованным PnL
+claude_advisor.py   — обёртка над Claude API + system prompt
 logs/               — trades.jsonl, decisions.jsonl
 ```
+
+## Бэктест
+
+Прогон стратегии на реальной истории (публичные Binance-эндпоинты, ключи для чтения не нужны):
+
+```bash
+# Дешёвая проверка на RSI-стратегии, без Claude
+python backtest.py --symbol BTCUSDT --days 30 --steps 200 --dry-strategy
+
+# Реальный прогон с Claude (стоит денег — ~$0.5-2 за 200 шагов на sonnet-5)
+python backtest.py --symbol BTCUSDT --days 30 --steps 100
+```
+
+Выведет PnL, число сделок, максимальную просадку, Sharpe (наивный).
 
 ## Важное предупреждение
 
