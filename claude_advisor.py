@@ -14,12 +14,54 @@ Action = Literal["BUY", "SELL", "HOLD"]
 
 
 @dataclass
+class Usage:
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cache_creation_input_tokens": self.cache_creation_input_tokens,
+            "cache_read_input_tokens": self.cache_read_input_tokens,
+        }
+
+
+# Sonnet 5 pricing per 1M tokens (as of 2026). Cache reads ~= 10% of input cost;
+# cache writes ~= 125% of input cost. Update if you switch models.
+PRICING = {
+    "claude-sonnet-5": {"in": 2.0, "out": 10.0, "cache_write": 2.5, "cache_read": 0.20},
+    "claude-opus-5": {"in": 5.0, "out": 25.0, "cache_write": 6.25, "cache_read": 0.50},
+    "claude-haiku-4-5": {"in": 1.0, "out": 5.0, "cache_write": 1.25, "cache_read": 0.10},
+}
+
+
+def usage_cost_usd(model: str, u: Usage) -> float:
+    rates = PRICING.get(model)
+    if rates is None:
+        return 0.0
+    return (
+        u.input_tokens * rates["in"]
+        + u.output_tokens * rates["out"]
+        + u.cache_creation_input_tokens * rates["cache_write"]
+        + u.cache_read_input_tokens * rates["cache_read"]
+    ) / 1_000_000
+
+
+@dataclass
 class Decision:
     action: Action
     size_usdt: float
     confidence: float
     reason: str
     raw: dict
+    usage: Usage = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.usage is None:
+            self.usage = Usage()
 
 
 SYSTEM_PROMPT = """You are a cautious crypto trading advisor operating on a Binance TESTNET account.
@@ -183,10 +225,20 @@ class ClaudeAdvisor:
     ) -> Decision:
         payload = _build_payload(snapshot, max_position_usdt, news=news, memory=memory)
         tool = _tool_schema()
+        # Prompt caching: mark the (stable) system prompt with cache_control so
+        # every subsequent call reads it back at ~10% of input token cost.
+        # `tools` renders BEFORE `system`, so the cache breakpoint on system
+        # implicitly caches the tool schema too.
         message = self.client.messages.create(
             model=self.model,
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             tools=[tool],
             tool_choice={"type": "tool", "name": tool["name"]},
             messages=[
@@ -199,6 +251,12 @@ class ClaudeAdvisor:
                 }
             ],
         )
+        usage = Usage(
+            input_tokens=getattr(message.usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(message.usage, "output_tokens", 0) or 0,
+            cache_creation_input_tokens=getattr(message.usage, "cache_creation_input_tokens", 0) or 0,
+            cache_read_input_tokens=getattr(message.usage, "cache_read_input_tokens", 0) or 0,
+        )
         for block in message.content:
             if block.type == "tool_use" and block.name == tool["name"]:
                 raw = dict(block.input)
@@ -208,5 +266,6 @@ class ClaudeAdvisor:
                     confidence=float(raw.get("confidence", 0.0)),
                     reason=str(raw.get("reason", "")),
                     raw=raw,
+                    usage=usage,
                 )
         raise RuntimeError("Claude did not return a tool_use block")

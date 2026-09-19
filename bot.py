@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from binance_client import BinanceTestnet, avg_fill_price
-from claude_advisor import ClaudeAdvisor, Decision
+from claude_advisor import ClaudeAdvisor, Decision, usage_cost_usd
 from config import Settings, load_settings
 from memory import load_recent_decisions
 from news_client import NewsClient, infer_currency_code
@@ -120,11 +120,16 @@ def run_once(
     decision = advisor.decide(
         snapshot, settings.max_position_usdt, news=news, memory=memory
     )
+    cost = usage_cost_usd(settings.claude_model, decision.usage)
     print(
         f"  decision: {decision.action} "
         f"size={decision.size_usdt} conf={decision.confidence:.2f} "
-        f"— {decision.reason}"
+        f"tokens={decision.usage.input_tokens}+{decision.usage.output_tokens} "
+        f"(cache: {decision.usage.cache_read_input_tokens} read, "
+        f"{decision.usage.cache_creation_input_tokens} write) "
+        f"cost=${cost:.5f}"
     )
+    print(f"  reason: {decision.reason}")
 
     _append_jsonl(
         DECISIONS_LOG,
@@ -136,7 +141,14 @@ def run_once(
                 snapshot.base_asset: snapshot.base_balance,
                 snapshot.quote_asset: snapshot.quote_balance,
             },
-            "decision": asdict(decision),
+            "decision": {
+                "action": decision.action,
+                "size_usdt": decision.size_usdt,
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+            },
+            "usage": decision.usage.to_dict(),
+            "cost_usd": cost,
             "dry_run": dry_run,
         },
     )
