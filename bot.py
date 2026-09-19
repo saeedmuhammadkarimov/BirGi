@@ -11,6 +11,7 @@ from pathlib import Path
 from binance_client import BinanceTestnet
 from claude_advisor import ClaudeAdvisor, Decision
 from config import Settings, load_settings
+from news_client import NewsClient, infer_currency_code
 
 
 LOG_DIR = Path(__file__).parent / "logs"
@@ -50,6 +51,7 @@ def run_once(
     advisor: ClaudeAdvisor,
     limiter: RateLimiter,
     dry_run: bool,
+    news_client: NewsClient | None = None,
 ) -> None:
     print(f"[{_now_iso()}] fetching snapshot for {settings.symbol}")
     snapshot = binance.get_snapshot(settings.symbol)
@@ -59,8 +61,17 @@ def run_once(
         f"{snapshot.quote_asset}={snapshot.quote_balance}"
     )
 
+    news: list[dict] | None = None
+    if news_client is not None:
+        try:
+            currency = infer_currency_code(settings.symbol)
+            news = news_client.fetch(currency, limit=8)
+            print(f"  fetched {len(news)} news headlines for {currency}")
+        except Exception as exc:
+            print(f"  news fetch failed (continuing without): {exc!r}")
+
     print("  asking Claude…")
-    decision = advisor.decide(snapshot, settings.max_position_usdt)
+    decision = advisor.decide(snapshot, settings.max_position_usdt, news=news)
     print(
         f"  decision: {decision.action} "
         f"size={decision.size_usdt} conf={decision.confidence:.2f} "
@@ -160,14 +171,15 @@ def main() -> None:
     binance = BinanceTestnet(settings.binance_api_key, settings.binance_api_secret)
     advisor = ClaudeAdvisor(settings.anthropic_api_key, settings.claude_model)
     limiter = RateLimiter(settings.max_trades_per_hour)
+    news_client = NewsClient(settings.cryptopanic_token) if settings.cryptopanic_token else None
 
     if args.mode == "once":
-        run_once(settings, binance, advisor, limiter, dry_run)
+        run_once(settings, binance, advisor, limiter, dry_run, news_client)
         return
 
     while True:
         try:
-            run_once(settings, binance, advisor, limiter, dry_run)
+            run_once(settings, binance, advisor, limiter, dry_run, news_client)
         except Exception as exc:
             print(f"[{_now_iso()}] iteration failed: {exc!r}")
         sleep_s = settings.interval_minutes * 60

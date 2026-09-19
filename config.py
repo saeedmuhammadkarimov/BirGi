@@ -18,6 +18,8 @@ class Settings:
     max_trades_per_hour: int
     dry_run: bool
     claude_model: str
+    cryptopanic_token: str
+    memory_depth: int
 
 
 def _required(name: str) -> str:
@@ -52,4 +54,6 @@ def load_settings() -> Settings:
         max_trades_per_hour=int(os.getenv("MAX_TRADES_PER_HOUR", "4")),
         dry_run=_bool("DRY_RUN", False),
         claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-5"),
+        cryptopanic_token=os.getenv("CRYPTOPANIC_TOKEN", "").strip(),
+        memory_depth=int(os.getenv("MEMORY_DEPTH", "10")),
     )
