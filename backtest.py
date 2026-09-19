@@ -150,6 +150,9 @@ def run_backtest(
         f"strategy={'claude' if use_claude else 'rsi-baseline'}"
     )
 
+    step_minutes = 5 * step_stride
+    steps_per_year = (365 * 24 * 60) / step_minutes if step_minutes > 0 else 252
+
     for i in range(250, len(fivem), step_stride):
         candle = fivem[i]
         price = candle.close
@@ -191,10 +194,16 @@ def run_backtest(
         if len(account.trades) >= steps:
             break
 
-    _print_summary(account, starting_usdt, max_dd_pct, fivem[-1].close)
+    _print_summary(account, starting_usdt, max_dd_pct, fivem[-1].close, steps_per_year)
 
 
-def _print_summary(account: SimAccount, starting_usdt: float, max_dd_pct: float, final_price: float) -> None:
+def _print_summary(
+    account: SimAccount,
+    starting_usdt: float,
+    max_dd_pct: float,
+    final_price: float,
+    steps_per_year: float,
+) -> None:
     final_eq = account.equity(final_price)
     pnl_pct = (final_eq - starting_usdt) / starting_usdt * 100
     n_trades = len(account.trades)
@@ -212,8 +221,8 @@ def _print_summary(account: SimAccount, starting_usdt: float, max_dd_pct: float,
             for i in range(1, len(account.equity_curve))
         ]
         if returns and statistics.stdev(returns) > 0:
-            sharpe = (statistics.mean(returns) / statistics.stdev(returns)) * (252 ** 0.5)
-            print(f"sharpe (naive)  : {sharpe:.2f}")
+            sharpe = (statistics.mean(returns) / statistics.stdev(returns)) * (steps_per_year ** 0.5)
+            print(f"sharpe (naive)  : {sharpe:.2f} (annualized at {steps_per_year:.0f} steps/yr)")
 
     if n_trades:
         buys = [t for t in account.trades if t["side"] == "BUY"]

@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from binance_client import BinanceTestnet
+from binance_client import BinanceTestnet, avg_fill_price
 from claude_advisor import ClaudeAdvisor, Decision
 from config import Settings, load_settings
 from memory import load_recent_decisions
@@ -213,7 +213,8 @@ def _execute(
     if decision.action == "BUY":
         order = binance.market_buy_quote(symbol, decision.size_usdt)
         qty = _filled_base_qty(order, decision.size_usdt / reference_price)
-        ledger.record_buy(symbol, qty, reference_price)
+        fill_price = avg_fill_price(order, reference_price)
+        ledger.record_buy(symbol, qty, fill_price)
         return order
     if decision.action == "SELL":
         price = binance.get_price(symbol)
@@ -233,8 +234,12 @@ def _close_position(
     reference_price: float,
     reason: str,
 ) -> None:
+    # market_sell_base already clips to actual free balance; if the ledger
+    # drifted past the exchange balance (fees, precision), we still exit
+    # everything the exchange lets us sell.
     order = binance.market_sell_base(symbol, base_qty)
     filled = _filled_base_qty(order, base_qty)
+    fill_price = avg_fill_price(order, reference_price)
     ledger.record_sell(symbol, filled)
     _append_jsonl(
         TRADES_LOG,
@@ -242,7 +247,7 @@ def _close_position(
             "ts": _now_iso(),
             "symbol": symbol,
             "action": "SELL",
-            "requested_usdt": base_qty * reference_price,
+            "requested_usdt": filled * fill_price,
             "confidence": 1.0,
             "reason": f"forced_close: {reason}",
             "order": order,

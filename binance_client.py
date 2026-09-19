@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 
 from binance.client import Client
 from binance.enums import (
@@ -12,8 +12,6 @@ from binance.enums import (
     SIDE_SELL,
 )
 
-
-TESTNET_URL = "https://testnet.binance.vision/api"
 
 TIMEFRAMES = {
     "5m": KLINE_INTERVAL_5MINUTE,
@@ -45,8 +43,8 @@ class MarketSnapshot:
 
 class BinanceTestnet:
     def __init__(self, api_key: str, api_secret: str) -> None:
+        # testnet=True already points Client at https://testnet.binance.vision/api
         self.client = Client(api_key, api_secret, testnet=True)
-        self.client.API_URL = TESTNET_URL
 
     def get_snapshot(
         self,
@@ -96,26 +94,74 @@ class BinanceTestnet:
         return float(bal["free"]) if bal else 0.0
 
     def market_buy_quote(self, symbol: str, quote_amount: float) -> dict:
-        """Spend `quote_amount` USDT to buy base asset at market."""
+        """Spend exactly `quote_amount` USDT at market via quoteOrderQty.
+
+        Using quoteOrderQty (instead of computing quantity locally) removes the
+        slippage window between our price fetch and Binance's fill: Binance
+        spends exactly this many USDT and gives us whatever base it fills.
+        """
         info = self.client.get_symbol_info(symbol)
-        step = _lot_step(info)
-        price = float(self.client.get_symbol_ticker(symbol=symbol)["price"])
-        qty = _floor_step(quote_amount / price, step)
-        if qty <= 0:
-            raise ValueError(f"Computed qty {qty} is below lot step {step}")
+        min_notional = _min_notional(info)
+        if quote_amount < min_notional:
+            raise ValueError(
+                f"quote_amount {quote_amount} below MIN_NOTIONAL {min_notional}"
+            )
+        # Round DOWN to the quote-precision to avoid "precision" filter errors.
+        precision = int(info.get("quoteAssetPrecision", 8))
+        quote_amount = float(
+            Decimal(str(quote_amount)).quantize(Decimal(10) ** -precision, rounding=ROUND_DOWN)
+        )
         return self.client.create_order(
-            symbol=symbol, side=SIDE_BUY, type="MARKET", quantity=qty
+            symbol=symbol,
+            side=SIDE_BUY,
+            type="MARKET",
+            quoteOrderQty=quote_amount,
         )
 
     def market_sell_base(self, symbol: str, base_amount: float) -> dict:
         info = self.client.get_symbol_info(symbol)
         step = _lot_step(info)
+        # Clip request to the actual free base balance, then floor to LOT_SIZE.
+        base_asset = info["baseAsset"]
+        free = self._balance(base_asset)
+        base_amount = min(base_amount, free)
         qty = _floor_step(base_amount, step)
         if qty <= 0:
-            raise ValueError(f"Computed qty {qty} is below lot step {step}")
+            raise ValueError(
+                f"Sell qty rounds to 0: requested {base_amount}, free {free}, step {step}"
+            )
         return self.client.create_order(
             symbol=symbol, side=SIDE_SELL, type="MARKET", quantity=qty
         )
+
+
+def avg_fill_price(order: dict, fallback: float) -> float:
+    """Real fill price averaged across MARKET fills.
+
+    Prefers Binance's cummulativeQuoteQty / executedQty (exact), then per-fill
+    weighted average, then `fallback`.
+    """
+    try:
+        cqq = float(order.get("cummulativeQuoteQty", 0) or 0)
+        eq = float(order.get("executedQty", 0) or 0)
+        if cqq > 0 and eq > 0:
+            return cqq / eq
+    except (TypeError, ValueError):
+        pass
+    try:
+        fills = order.get("fills") or []
+        total_qty = 0.0
+        total_notional = 0.0
+        for f in fills:
+            q = float(f.get("qty", 0))
+            p = float(f.get("price", 0))
+            total_qty += q
+            total_notional += q * p
+        if total_qty > 0:
+            return total_notional / total_qty
+    except (TypeError, ValueError):
+        pass
+    return fallback
 
 
 def _lot_step(info: dict) -> Decimal:
@@ -123,6 +169,17 @@ def _lot_step(info: dict) -> Decimal:
         if f["filterType"] == "LOT_SIZE":
             return Decimal(f["stepSize"])
     return Decimal("0.000001")
+
+
+def _min_notional(info: dict) -> float:
+    for f in info["filters"]:
+        if f["filterType"] in ("MIN_NOTIONAL", "NOTIONAL"):
+            key = "minNotional" if "minNotional" in f else "notional"
+            try:
+                return float(f.get(key, "0"))
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
 
 
 def _floor_step(qty: float, step: Decimal) -> float:
