@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Нур Банк — демо</title>
+<style>
+:root{--c:#0b6e4f;--c2:#08543d;--bg:#f5f7f6;--t:#1c2623;--m:#5d6b66;--card:#fff;--line:#e1e7e4}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--t);line-height:1.55}
+header{background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+.bar{max-width:1100px;margin:auto;padding:12px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.logo{font-weight:800;font-size:22px;color:var(--c);margin-right:auto}
+nav{display:flex;gap:6px;flex-wrap:wrap}
+nav button,.lang button{border:0;background:none;padding:8px 12px;border-radius:8px;font:inherit;cursor:pointer;color:var(--t)}
+nav button:hover{background:var(--bg)}
+nav button.on{background:var(--c);color:#fff}
+.lang{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.lang button{border-radius:0;padding:6px 12px}
+.lang button.on{background:var(--c);color:#fff}
+.hero{background:linear-gradient(135deg,var(--c),var(--c2));color:#fff;padding:56px 16px}
+.hero div{max-width:1100px;margin:auto}
+.hero h1{font-size:clamp(28px,5vw,44px);margin:0 0 10px}
+.hero p{max-width:560px;opacity:.9;margin:0 0 20px}
+.btn{display:inline-block;background:#fff;color:var(--c);padding:10px 20px;border-radius:10px;font-weight:700;border:0;cursor:pointer;font-size:16px}
+main{max-width:1100px;margin:auto;padding:28px 16px 60px}
+h2{margin:0 0 18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+.card h3{margin:0 0 6px;font-size:18px}
+.card p{margin:0 0 12px;color:var(--m);font-size:15px}
+.tag{display:inline-block;background:#e4f3ed;color:var(--c2);border-radius:20px;padding:2px 10px;font-size:13px;font-weight:600}
+.ic{font-size:30px;margin-bottom:6px}
+.calc{display:grid;gap:12px;max-width:420px}
+.calc label{display:grid;gap:4px;font-size:14px;color:var(--m)}
+.calc input{padding:10px;border:1px solid var(--line);border-radius:8px;font:inherit}
+.res{font-size:22px;font-weight:800;color:var(--c)}
+footer{background:#13211c;color:#b8c6c0;padding:24px 16px;text-align:center;font-size:14px}
+.note{background:#fff8e1;border:1px solid #f0dc9a;padding:8px 16px;text-align:center;font-size:13px}
+section{display:none}section.on{display:block}
+</style>
+</head>
+<body>
+<div class="note" data-i="note"></div>
+<header><div class="bar">
+  <div class="logo">🌿 <span data-i="brand"></span></div>
+  <nav id="nav"></nav>
+  <div class="lang" id="lang">
+    <button data-l="ru">RU</button><button data-l="zh">中文</button><button data-l="uz">UZ</button>
+  </div>
+</div></header>
+
+<div class="hero"><div>
+  <h1 data-i="h1"></h1>
+  <p data-i="h1p"></p>
+  <button class="btn" data-i="cta" onclick="show('cards')"></button>
+</div></div>
+
+<main>
+  <section id="cards"><h2 data-i="n_cards"></h2><div class="grid" data-list="cards"></div></section>
+  <section id="deposits"><h2 data-i="n_deposits"></h2><div class="grid" data-list="deposits"></div></section>
+  <section id="loans"><h2 data-i="n_loans"></h2><div class="grid" data-list="loans"></div></section>
+  <section id="services"><h2 data-i="n_services"></h2><div class="grid" data-list="services"></div></section>
+  <section id="calc"><h2 data-i="n_calc"></h2>
+    <div class="card calc">
+      <label><span data-i="c_sum"></span><input id="sum" type="number" value="10000000" min="0"></label>
+      <label><span data-i="c_rate"></span><input id="rate" type="number" value="18" min="0" step="0.5"></label>
+      <label><span data-i="c_term"></span><input id="term" type="number" value="12" min="1"></label>
+      <div><span data-i="c_res"></span><div class="res" id="out"></div></div>
+    </div>
+  </section>
+  <section id="contacts"><h2 data-i="n_contacts"></h2>
+    <div class="card"><p data-i="addr"></p><p>☎ +998 71 000 00 00</p><p>✉ info@example.com</p></div>
+  </section>
+</main>
+<footer data-i="foot"></footer>
+
+<script>
+const T={
+ru:{
+ note:"Демонстрационный сайт. Вымышленный банк, не является настоящим банком и не предоставляет услуг.",
+ brand:"Нур Банк",h1:"Банк для вашей жизни и бизнеса",h1p:"Карты, вклады, кредиты и онлайн-сервисы в одном месте.",cta:"Выбрать карту",
+ n_cards:"Карты",n_deposits:"Вклады",n_loans:"Кредиты",n_services:"Сервисы",n_calc:"Калькулятор",n_contacts:"Контакты",
+ c_sum:"Сумма, сум",c_rate:"Ставка, % годовых",c_term:"Срок, месяцев",c_res:"Доход / переплата за срок:",cur:"сум",
+ addr:"г. Ташкент, ул. Примерная, 1",foot:"© 2026 Нур Банк (демо). Все данные вымышлены.",
+ more:"Подробнее",
+ cards:[["💳","Карта Дебет","Бесплатное обслуживание, кэшбэк до 3% на покупки.","0 сум"],["💎","Карта Премиум","Лаунж в аэропортах, страхование путешествий.","от 50 000 сум/мес"],["🌍","Валютная карта","Счёт в USD и EUR, выгодная конвертация.","1% конвертация"],["🧒","Детская карта","Контроль расходов родителями.","Бесплатно"]],
+ deposits:[["📈","Накопительный","Пополнение и снятие без ограничений.","до 14% годовых"],["🔒","Срочный вклад","Фиксированная ставка на срок 6–36 месяцев.","до 20% годовых"],["💵","Валютный вклад","Сохраняйте сбережения в долларах.","до 5% годовых"]],
+ loans:[["🏠","Ипотека","Первый взнос от 20%, срок до 20 лет.","от 17% годовых"],["🚗","Автокредит","Одобрение за 1 день.","от 19% годовых"],["🛍","Потребительский","Без залога и справок.","от 22% годовых"],["🏢","Бизнес-кредит","Для малого и среднего бизнеса.","от 20% годовых"]],
+ services:[["📱","Мобильный банк","Платежи и переводы 24/7.","Бесплатно"],["🔁","Переводы","Между картами и за границу.","от 0%"],["🧾","Коммунальные платежи","Оплата без комиссии.","0%"],["🛡","Страхование","Жизнь, имущество, путешествия.","от 1%"]]
+},
+zh:{
+ note:"演示网站。虚构银行，并非真实银行，不提供任何金融服务。",
+ brand:"努尔银行",h1:"为您的生活与事业服务的银行",h1p:"银行卡、存款、贷款和在线服务，一站式办理。",cta:"选择银行卡",
+ n_cards:"银行卡",n_deposits:"存款",n_loans:"贷款",n_services:"服务",n_calc:"计算器",n_contacts:"联系我们",
+ c_sum:"金额（苏姆）",c_rate:"年利率（%）",c_term:"期限（月）",c_res:"期间收益 / 利息：",cur:"苏姆",
+ addr:"塔什干市，示例街 1 号",foot:"© 2026 努尔银行（演示）。所有数据均为虚构。",
+ more:"了解更多",
+ cards:[["💳","借记卡","免年费，购物最高返现3%。","0 苏姆"],["💎","尊享卡","机场贵宾厅，旅行保险。","起 50,000 苏姆/月"],["🌍","外币卡","美元、欧元账户，优惠汇兑。","汇兑费 1%"],["🧒","儿童卡","家长可管控消费。","免费"]],
+ deposits:[["📈","活期理财","随时存取，不限次数。","年利率最高 14%"],["🔒","定期存款","6–36个月固定利率。","年利率最高 20%"],["💵","外币存款","以美元保值增值。","年利率最高 5%"]],
+ loans:[["🏠","住房贷款","首付20%起，最长20年。","年利率 17% 起"],["🚗","汽车贷款","1天内审批。","年利率 19% 起"],["🛍","消费贷款","无需抵押和证明。","年利率 22% 起"],["🏢","企业贷款","面向中小企业。","年利率 20% 起"]],
+ services:[["📱","手机银行","全天候支付与转账。","免费"],["🔁","转账汇款","卡间转账及跨境汇款。","0% 起"],["🧾","生活缴费","水电煤免手续费。","0%"],["🛡","保险","人寿、财产、旅行保险。","1% 起"]]
+},
+uz:{
+ note:"Demo sayt. Xayoliy bank, haqiqiy bank emas va xizmat ko'rsatmaydi.",
+ brand:"Nur Bank",h1:"Hayotingiz va biznesingiz uchun bank",h1p:"Kartalar, omonatlar, kreditlar va onlayn xizmatlar bir joyda.",cta:"Kartani tanlash",
+ n_cards:"Kartalar",n_deposits:"Omonatlar",n_loans:"Kreditlar",n_services:"Xizmatlar",n_calc:"Kalkulyator",n_contacts:"Aloqa",
+ c_sum:"Summa, so'm",c_rate:"Yillik foiz, %",c_term:"Muddat, oy",c_res:"Muddat uchun daromad / foiz:",cur:"so'm",
+ addr:"Toshkent sh., Namuna ko'chasi, 1",foot:"© 2026 Nur Bank (demo). Barcha ma'lumotlar xayoliy.",
+ more:"Batafsil",
+ cards:[["💳","Debet karta","Bepul xizmat, xaridlarga 3% gacha keshbek.","0 so'm"],["💎","Premium karta","Aeroport lounge, sayohat sug'urtasi.","oyiga 50 000 so'mdan"],["🌍","Valyuta kartasi","USD va EUR hisobi, qulay konvertatsiya.","1% konvertatsiya"],["🧒","Bolalar kartasi","Ota-onalar xarajatni nazorat qiladi.","Bepul"]],
+ deposits:[["📈","Jamg'arma","Cheklovsiz to'ldirish va yechish.","yiliga 14% gacha"],["🔒","Muddatli omonat","6–36 oyga qat'iy foiz.","yiliga 20% gacha"],["💵","Valyuta omonati","Jamg'armani dollarda saqlang.","yiliga 5% gacha"]],
+ loans:[["🏠","Ipoteka","Dastlabki to'lov 20% dan, 20 yilgacha.","yiliga 17% dan"],["🚗","Avtokredit","1 kunda ma'qullash.","yiliga 19% dan"],["🛍","Iste'mol krediti","Garov va ma'lumotnomasiz.","yiliga 22% dan"],["🏢","Biznes kredit","Kichik va o'rta biznes uchun.","yiliga 20% dan"]],
+ services:[["📱","Mobil bank","24/7 to'lov va o'tkazmalar.","Bepul"],["🔁","O'tkazmalar","Kartalar o'rtasida va xorijga.","0% dan"],["🧾","Kommunal to'lovlar","Komissiyasiz to'lov.","0%"],["🛡","Sug'urta","Hayot, mulk, sayohat.","1% dan"]]
+}};
+const tabs=["cards","deposits","loans","services","calc","contacts"];
+let L=(()=>{try{return localStorage.getItem("lang")}catch(e){}})()||"ru", cur="cards";
+function fmt(n){return Math.round(n).toLocaleString(L==="zh"?"zh-CN":L==="uz"?"uz-UZ":"ru-RU")}
+function render(){
+ const t=T[L];
+ document.documentElement.lang=L;document.title=t.brand+" — demo";
+ document.querySelectorAll("[data-i]").forEach(e=>e.textContent=t[e.dataset.i]);
+ document.querySelectorAll("[data-list]").forEach(g=>{
+  g.innerHTML=t[g.dataset.list].map(c=>`<div class="card"><div class="ic">${c[0]}</div><h3>${c[1]}</h3><p>${c[2]}</p><span class="tag">${c[3]}</span></div>`).join("");
+ });
+ document.getElementById("nav").innerHTML=tabs.map(k=>`<button class="${k===cur?"on":""}" onclick="show('${k}')">${t["n_"+k]}</button>`).join("");
+ document.querySelectorAll("#lang button").forEach(b=>b.classList.toggle("on",b.dataset.l===L));
+ document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id===cur));
+ calc();
+}
+function show(k){cur=k;render();scrollTo({top:0,behavior:"smooth"})}
+function calc(){
+ const s=+sum.value||0,r=+rate.value||0,m=+term.value||0;
+ out.textContent=fmt(s*r/100*m/12)+" "+T[L].cur;
+}
+document.querySelectorAll("#lang button").forEach(b=>b.onclick=()=>{L=b.dataset.l;try{localStorage.setItem("lang",L)}catch(e){}render()});
+["sum","rate","term"].forEach(i=>document.getElementById(i).oninput=calc);
+render();
+</script>
+</body>
+</html>
