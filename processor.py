@@ -223,14 +223,26 @@ def column_letter_to_index(letter: str) -> int:
     return result
 
 
+def _normalize_inn(val) -> Optional[str]:
+    """Excel stores numeric INNs as floats (e.g. 308839903.0) — strip the trailing .0."""
+    if val is None:
+        return None
+    if isinstance(val, float) and val.is_integer():
+        val = int(val)
+    s = str(val).strip()
+    if s.endswith(".0") and s[:-2].isdigit():
+        s = s[:-2]
+    return s or None
+
+
 def read_inns(filepath: str, col_idx: int) -> list[str]:
     wb = openpyxl.load_workbook(filepath, read_only=True, data_only=True)
     ws = wb.active
     inns = []
     for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx, values_only=True):
-        val = row[0]
-        if val is not None and str(val).strip():
-            inns.append(str(val).strip())
+        inn = _normalize_inn(row[0])
+        if inn:
+            inns.append(inn)
     wb.close()
     return inns
 
