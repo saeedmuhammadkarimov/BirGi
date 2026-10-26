@@ -3,7 +3,7 @@ MESSAGES = {
         "choose_language": "Выберите язык / Tilni tanlang:",
         "language_set": "Язык установлен: Русский 🇷🇺",
         "welcome": (
-            "Отправьте Excel-файл (.xlsx) со столбцом ИНН.\n"
+            "Отправьте Excel-файл (.xlsx) со столбцом ИНН — либо просто напишите ИНН (один или несколько) текстом.\n"
             "Бот найдёт данные по каждому ИНН и вернёт готовый файл.\n\n"
             "Используйте /language для смены языка.\n"
             "Используйте /cancel для отмены."
@@ -27,6 +27,7 @@ MESSAGES = {
         "done": "Готово. Обработано {count} ИНН.",
         "error": "Ошибка при обработке: {error}",
         "no_inns": "В указанном столбце не найдено ни одного ИНН.",
+        "no_inns_in_text": "В сообщении не найдено ни одного ИНН (ожидаются 9 цифр). Напиши ИНН текстом или пришли Excel-файл.",
         "cancelled": "Отменено.",
         "using_column": "Использую столбец {col}. Начинаю обработку...",
     },
@@ -34,7 +35,7 @@ MESSAGES = {
         "choose_language": "Выберите язык / Tilni tanlang:",
         "language_set": "Til o'rnatildi: O'zbek 🇺🇿",
         "welcome": (
-            "INN ustuni bo'lgan Excel fayl (.xlsx) yuboring.\n"
+            "INN ustuni bo'lgan Excel fayl (.xlsx) yuboring — yoki INNni (bitta yoki bir nechta) matn bilan yozing.\n"
             "Bot har bir INN bo'yicha ma'lumot topib, tayyor faylni qaytaradi.\n\n"
             "Tilni o'zgartirish uchun /language buyrug'ini ishlating.\n"
             "Bekor qilish uchun /cancel buyrug'ini ishlating."
@@ -58,6 +59,7 @@ MESSAGES = {
         "done": "Tayyor. {count} ta INN qayta ishlandi.",
         "error": "Ishlov berishda xatolik: {error}",
         "no_inns": "Ko'rsatilgan ustunda INN topilmadi.",
+        "no_inns_in_text": "Xabarda INN topilmadi (9 raqam kutilmoqda). INN ni matn bilan yozing yoki Excel fayl yuboring.",
         "cancelled": "Bekor qilindi.",
         "using_column": "{col} ustuni ishlatilmoqda. Ishlov boshlanmoqda...",
     },

@@ -323,10 +323,18 @@ async def process_excel(
     progress_callback: Optional[Callable] = None,
 ) -> int:
     inns = read_inns(input_path, col_idx)
+    return await process_inns(inns, output_path, progress_callback)
+
+
+async def process_inns(
+    inns: list[str],
+    output_path: str,
+    progress_callback: Optional[Callable] = None,
+) -> int:
     total = len(inns)
 
     if total == 0:
-        raise ValueError("No INN numbers found in the specified column.")
+        raise ValueError("No INN numbers provided.")
 
     limiter = RateLimiter(RATE_LIMIT)
     completed = [0]

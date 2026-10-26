@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -23,7 +24,10 @@ from processor import (
     detect_inn_column,
     find_column_by_name,
     process_excel,
+    process_inns,
 )
+
+INN_PATTERN = re.compile(r"\b\d{9}\b")
 
 load_dotenv()
 
@@ -176,6 +180,46 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+async def handle_text_inns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "lang" not in context.user_data:
+        context.user_data["lang"] = "ru"
+
+    text = update.message.text or ""
+    inns = list(dict.fromkeys(INN_PATTERN.findall(text)))
+
+    if not inns:
+        await update.message.reply_text(t(context, "no_inns_in_text"))
+        return
+
+    msg = await update.message.reply_text(t(context, "processing", current=0, total=len(inns)))
+    tmpdir = tempfile.mkdtemp()
+    output_filename = f"inn_lookup_{len(inns)}.xlsx"
+    output_path = str(Path(tmpdir) / output_filename)
+    last_reported = [0]
+
+    async def progress(current: int, total: int):
+        if current - last_reported[0] >= 10 or current == total:
+            last_reported[0] = current
+            try:
+                await msg.edit_text(t(context, "processing", current=current, total=total))
+            except Exception:
+                pass
+
+    try:
+        count = await process_inns(inns, output_path, progress)
+        try:
+            await msg.edit_text(t(context, "done", count=count))
+        except Exception:
+            pass
+        with open(output_path, "rb") as f:
+            await update.message.reply_document(document=f, filename=output_filename)
+    except Exception as e:
+        logger.exception("Processing error (text)")
+        await msg.edit_text(t(context, "error", error=e))
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task = context.user_data.get("processing_task")
     if task and not task.done():
@@ -210,6 +254,7 @@ def main():
     app.add_handler(CommandHandler("language", language_command))
     app.add_handler(CallbackQueryHandler(handle_language_choice, pattern="^lang_"))
     app.add_handler(conv)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_inns))
     try:
         app.run_polling(drop_pending_updates=True)
     except KeyboardInterrupt:
