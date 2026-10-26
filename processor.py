@@ -316,6 +316,96 @@ async def fetch_connections(client: httpx.AsyncClient, inn: str, limiter: RateLi
     return []
 
 
+CUSTOMS_MAX_ROWS_PER_INN = int(os.getenv("CUSTOMS_MAX_ROWS_PER_INN", "2000"))
+CUSTOMS_PAGE_SIZE = 1000
+
+CUSTOMS_SHEET_COLUMNS = [
+    ("inn", "ИНН запроса"),
+    ("role", "Роль"),
+    ("period", "Период"),
+    ("release_date", "Дата выпуска"),
+    ("decl_type", "Тип декларации"),
+    ("sender_name", "Отправитель"),
+    ("sender_code", "ИНН отправителя"),
+    ("receiver_name", "Получатель"),
+    ("receiver_code", "ИНН получателя"),
+    ("declarant_name", "Декларант"),
+    ("declarant_code", "ИНН декларанта"),
+    ("country_from", "Страна отправки"),
+    ("country_to", "Страна назначения"),
+    ("country_contract", "Страна контракта"),
+    ("country_origin", "Страна происхождения"),
+    ("tnved", "ТН ВЭД"),
+    ("product_name", "Товар"),
+    ("product_amount", "Количество"),
+    ("gross_weight", "Вес брутто, кг"),
+    ("net_weight", "Вес нетто, кг"),
+    ("invoice_amount", "Сумма инвойса"),
+    ("customs_value_usd", "Таможенная стоимость, USD"),
+]
+
+
+def _flatten_customs_row(inn: str, row: dict) -> dict:
+    roles = row.get("matched_roles") or []
+    return {
+        "inn": inn,
+        "role": ", ".join(roles) if isinstance(roles, list) else str(roles),
+        "period": row.get("period"),
+        "release_date": row.get("gdvipdate"),
+        "decl_type": row.get("g1a"),
+        "sender_name": row.get("g2name"),
+        "sender_code": row.get("g2code2"),
+        "receiver_name": row.get("g8name"),
+        "receiver_code": row.get("g8code2"),
+        "declarant_name": row.get("g9name"),
+        "declarant_code": row.get("g9code2"),
+        "country_from": row.get("country_from"),
+        "country_to": row.get("country_to"),
+        "country_contract": row.get("country_contract"),
+        "country_origin": row.get("country_origin"),
+        "tnved": row.get("g33"),
+        "product_name": row.get("g31name"),
+        "product_amount": row.get("g31amount"),
+        "gross_weight": row.get("g35"),
+        "net_weight": row.get("g38"),
+        "invoice_amount": row.get("g22b2"),
+        "customs_value_usd": row.get("g45usd"),
+    }
+
+
+async def fetch_customs(client: httpx.AsyncClient, inn: str, limiter: RateLimiter) -> list:
+    rows: list = []
+    offset = 0
+    while len(rows) < CUSTOMS_MAX_ROWS_PER_INN:
+        await limiter.acquire()
+        try:
+            resp = await client.get(
+                "/api/customs/declarations",
+                params={"inn": inn, "limit": CUSTOMS_PAGE_SIZE, "offset": offset},
+                headers={"token": f"Bearer {API_TOKEN}"},
+                timeout=60.0,
+            )
+            if resp.status_code != 200:
+                if resp.status_code != 404:
+                    logger.error("INN %s customs — HTTP %s: %s", inn, resp.status_code, resp.text[:300])
+                break
+            body = resp.json()
+            batch = body.get("results") or []
+            if not batch:
+                break
+            rows.extend(batch)
+            total = int(body.get("total") or 0)
+            if offset + len(batch) >= total:
+                break
+            offset += len(batch)
+        except Exception as e:
+            logger.error("INN %s customs — request failed: %s", inn, e)
+            break
+    if len(rows) >= CUSTOMS_MAX_ROWS_PER_INN:
+        logger.warning("INN %s customs — truncated at %d rows (per-INN cap)", inn, CUSTOMS_MAX_ROWS_PER_INN)
+    return rows
+
+
 async def process_excel(
     input_path: str,
     output_path: str,
@@ -338,7 +428,7 @@ async def process_inns(
 
     limiter = RateLimiter(RATE_LIMIT)
     completed = [0]
-    raw_results: list[tuple[str, dict, list, list, list]] = [None] * total
+    raw_results: list[tuple[str, dict, list, list, list, list]] = [None] * total
 
     async def fetch_and_store(idx: int, inn: str, client: httpx.AsyncClient):
         try:
@@ -349,10 +439,11 @@ async def process_inns(
             if conn_founders:
                 founders = conn_founders
             trademarks = await fetch_trademarks(client, flat.get("id"), limiter)
-            raw_results[idx] = (inn, flat, founders, trademarks, conn_rows)
+            customs = await fetch_customs(client, inn, limiter)
+            raw_results[idx] = (inn, flat, founders, trademarks, conn_rows, customs)
         except Exception as e:
             logger.error("Unexpected error for INN %s: %s", inn, e)
-            raw_results[idx] = (inn, {}, [], [], [])
+            raw_results[idx] = (inn, {}, [], [], [], [])
         completed[0] += 1
         if progress_callback:
             await progress_callback(completed[0], total)
@@ -362,16 +453,17 @@ async def process_inns(
             fetch_and_store(i, inn, client) for i, inn in enumerate(inns)
         ], return_exceptions=True)
 
-    max_founders = max((len(founders) for _, _, founders, _, _ in raw_results), default=0)
-    max_trademarks = max((len(trademarks) for _, _, _, trademarks, _ in raw_results), default=0)
-    max_connections = max((len(conn_rows) for _, _, _, _, conn_rows in raw_results), default=0)
+    max_founders = max((len(founders) for _, _, founders, _, _, _ in raw_results), default=0)
+    max_trademarks = max((len(trademarks) for _, _, _, trademarks, _, _ in raw_results), default=0)
+    max_connections = max((len(conn_rows) for _, _, _, _, conn_rows, _ in raw_results), default=0)
     all_columns = COLUMNS + _founder_columns(max_founders) + _trademark_columns(max_trademarks) + _connection_columns(max_connections)
 
     wb_out = openpyxl.Workbook()
     ws_out = wb_out.active
+    ws_out.title = "Компании"
     ws_out.append(all_columns)
 
-    for inn, flat, founders, trademarks, conn_rows in raw_results:
+    for inn, flat, founders, trademarks, conn_rows, _ in raw_results:
         if flat:
             row_values = [flat.get(c) for c in COLUMNS]
             for f in founders:
@@ -399,6 +491,21 @@ async def process_inns(
         ws_out.append([v if (v is not None and v != "") else "—" for v in row_values])
 
     _format_sheet(ws_out, all_columns)
+
+    customs_total = sum(len(c) for _, _, _, _, _, c in raw_results)
+    if customs_total > 0:
+        ws_customs = wb_out.create_sheet("Таможенные декларации")
+        customs_headers = [h for _, h in CUSTOMS_SHEET_COLUMNS]
+        customs_keys = [k for k, _ in CUSTOMS_SHEET_COLUMNS]
+        ws_customs.append(customs_headers)
+        for inn, _, _, _, _, customs in raw_results:
+            for row in customs:
+                flat_row = _flatten_customs_row(inn, row)
+                ws_customs.append([
+                    flat_row.get(k) if flat_row.get(k) not in (None, "") else "—"
+                    for k in customs_keys
+                ])
+        _format_sheet(ws_customs, customs_headers)
 
     wb_out.save(output_path)
     return total
