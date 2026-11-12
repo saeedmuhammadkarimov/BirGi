@@ -15,7 +15,13 @@ logger = logging.getLogger(__name__)
 
 API_BASE = os.getenv("API_BASE_URL", "https://api.myorg.uz")
 API_TOKEN = os.getenv("API_TOKEN")
-RATE_LIMIT = 3  # requests per second
+RATE_LIMIT = int(os.getenv("RATE_LIMIT", "4"))  # requests per second (API caps at 5)
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "150"))
+MAX_ROWS_PER_EXCEL = int(os.getenv("MAX_ROWS_PER_EXCEL", "5000"))
+TELEGRAM_MAX_FILE_MB = 48  # Telegram bot API limit is 50MB, leave a margin
+
+# Features we observed returning 403 at least once — skip them for subsequent INNs to save API calls.
+DISABLED_FEATURES: set = set()
 
 # Base columns — founders are appended dynamically after fetching
 COLUMNS = [
@@ -285,6 +291,8 @@ async def fetch_inn(client: httpx.AsyncClient, inn: str, limiter: RateLimiter) -
 async def fetch_trademarks(client: httpx.AsyncClient, entity_id, limiter: RateLimiter) -> list:
     if not entity_id:
         return []
+    if "trademarks" in DISABLED_FEATURES:
+        return []
     await limiter.acquire()
     try:
         resp = await client.get(
@@ -294,13 +302,19 @@ async def fetch_trademarks(client: httpx.AsyncClient, entity_id, limiter: RateLi
         )
         if resp.status_code == 200:
             return resp.json().get("rows") or []
-        logger.error("entity %s trademarks — HTTP %s: %s", entity_id, resp.status_code, resp.text[:300])
+        if resp.status_code == 403:
+            DISABLED_FEATURES.add("trademarks")
+            logger.warning("trademarks disabled for this token (HTTP 403); skipping for remaining INNs")
+        else:
+            logger.error("entity %s trademarks — HTTP %s: %s", entity_id, resp.status_code, resp.text[:300])
     except Exception as e:
         logger.error("entity %s trademarks — request failed: %s", entity_id, e)
     return []
 
 
 async def fetch_connections(client: httpx.AsyncClient, inn: str, limiter: RateLimiter) -> list:
+    if "connections" in DISABLED_FEATURES:
+        return []
     await limiter.acquire()
     try:
         resp = await client.get(
@@ -310,7 +324,11 @@ async def fetch_connections(client: httpx.AsyncClient, inn: str, limiter: RateLi
         )
         if resp.status_code == 200:
             return resp.json().get("rows") or []
-        logger.error("INN %s connections — HTTP %s: %s", inn, resp.status_code, resp.text[:300])
+        if resp.status_code == 403:
+            DISABLED_FEATURES.add("connections")
+            logger.warning("connections disabled for this token (HTTP 403); skipping for remaining INNs")
+        else:
+            logger.error("INN %s connections — HTTP %s: %s", inn, resp.status_code, resp.text[:300])
     except Exception as e:
         logger.error("INN %s connections — request failed: %s", inn, e)
     return []
@@ -374,6 +392,8 @@ def _flatten_customs_row(inn: str, row: dict) -> dict:
 
 
 async def fetch_customs(client: httpx.AsyncClient, inn: str, limiter: RateLimiter) -> list:
+    if "customs" in DISABLED_FEATURES:
+        return []
     rows: list = []
     offset = 0
     while len(rows) < CUSTOMS_MAX_ROWS_PER_INN:
@@ -386,7 +406,10 @@ async def fetch_customs(client: httpx.AsyncClient, inn: str, limiter: RateLimite
                 timeout=60.0,
             )
             if resp.status_code != 200:
-                if resp.status_code != 404:
+                if resp.status_code in (401, 402, 403):
+                    DISABLED_FEATURES.add("customs")
+                    logger.warning("customs disabled for this token (HTTP %s); skipping for remaining INNs", resp.status_code)
+                elif resp.status_code != 404:
                     logger.error("INN %s customs — HTTP %s: %s", inn, resp.status_code, resp.text[:300])
                 break
             body = resp.json()
@@ -408,27 +431,29 @@ async def fetch_customs(client: httpx.AsyncClient, inn: str, limiter: RateLimite
 
 async def process_excel(
     input_path: str,
-    output_path: str,
+    output_dir: str,
     col_idx: int,
     progress_callback: Optional[Callable] = None,
-) -> int:
+) -> tuple[int, list[str]]:
     inns = read_inns(input_path, col_idx)
-    return await process_inns(inns, output_path, progress_callback)
+    return await process_inns(inns, output_dir, progress_callback)
 
 
 async def process_inns(
     inns: list[str],
-    output_path: str,
+    output_dir: str,
     progress_callback: Optional[Callable] = None,
-) -> int:
+) -> tuple[int, list[str]]:
     total = len(inns)
 
     if total == 0:
         raise ValueError("No INN numbers provided.")
 
+    DISABLED_FEATURES.clear()  # Each run gets a fresh chance at every endpoint.
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     limiter = RateLimiter(RATE_LIMIT)
-    completed = [0]
-    raw_results: list[tuple[str, dict, list, list, list, list]] = [None] * total
+    raw_results: list = [None] * total
 
     async def fetch_and_store(idx: int, inn: str, client: httpx.AsyncClient):
         try:
@@ -444,71 +469,100 @@ async def process_inns(
         except Exception as e:
             logger.error("Unexpected error for INN %s: %s", inn, e)
             raw_results[idx] = (inn, {}, [], [], [], [])
-        completed[0] += 1
-        if progress_callback:
-            await progress_callback(completed[0], total)
 
     async with httpx.AsyncClient(base_url=API_BASE) as client:
-        await asyncio.gather(*[
-            fetch_and_store(i, inn, client) for i, inn in enumerate(inns)
-        ], return_exceptions=True)
+        for batch_start in range(0, total, BATCH_SIZE):
+            batch_end = min(batch_start + BATCH_SIZE, total)
+            await asyncio.gather(*[
+                fetch_and_store(i, inns[i], client) for i in range(batch_start, batch_end)
+            ], return_exceptions=True)
+            if progress_callback:
+                try:
+                    await progress_callback(batch_end, total)
+                except Exception as e:
+                    logger.warning("progress callback failed at %d/%d: %s", batch_end, total, e)
+            logger.info("Fetched batch %d/%d (%d done out of %d)", batch_start // BATCH_SIZE + 1,
+                        (total + BATCH_SIZE - 1) // BATCH_SIZE, batch_end, total)
+
+    # Guard against any None entries (should not happen, but be safe).
+    for i, r in enumerate(raw_results):
+        if r is None:
+            raw_results[i] = (inns[i], {}, [], [], [], [])
 
     max_founders = max((len(founders) for _, _, founders, _, _, _ in raw_results), default=0)
     max_trademarks = max((len(trademarks) for _, _, _, trademarks, _, _ in raw_results), default=0)
     max_connections = max((len(conn_rows) for _, _, _, _, conn_rows, _ in raw_results), default=0)
     all_columns = COLUMNS + _founder_columns(max_founders) + _trademark_columns(max_trademarks) + _connection_columns(max_connections)
+    customs_headers = [h for _, h in CUSTOMS_SHEET_COLUMNS]
+    customs_keys = [k for k, _ in CUSTOMS_SHEET_COLUMNS]
 
-    wb_out = openpyxl.Workbook()
-    ws_out = wb_out.active
-    ws_out.title = "Компании"
-    ws_out.append(all_columns)
+    n_files = (total + MAX_ROWS_PER_EXCEL - 1) // MAX_ROWS_PER_EXCEL
+    written: list[str] = []
 
-    for inn, flat, founders, trademarks, conn_rows, _ in raw_results:
-        if flat:
-            row_values = [flat.get(c) for c in COLUMNS]
-            for f in founders:
-                row_values += [
-                    f.get("name"),
-                    f.get("percentage"),
-                    f.get("is_individual"),
-                    f.get("pinfl"),
-                ]
-            row_values += [""] * ((max_founders - len(founders)) * 4)
-            for tm in trademarks:
-                row_values += [tm.get("transliteration")]
-            row_values += [""] * (max_trademarks - len(trademarks))
-            for conn in conn_rows:
-                row_values += [
-                    conn.get("inn"),
-                    conn.get("name"),
-                    conn.get("director"),
-                ]
-            row_values += [""] * ((max_connections - len(conn_rows)) * 3)
+    for file_idx in range(n_files):
+        chunk_start = file_idx * MAX_ROWS_PER_EXCEL
+        chunk_end = min(chunk_start + MAX_ROWS_PER_EXCEL, total)
+        chunk = raw_results[chunk_start:chunk_end]
+
+        wb_out = openpyxl.Workbook()
+        ws_out = wb_out.active
+        ws_out.title = "Компании"
+        ws_out.append(all_columns)
+
+        for inn, flat, founders, trademarks, conn_rows, _ in chunk:
+            if flat:
+                row_values = [flat.get(c) for c in COLUMNS]
+                for f in founders:
+                    row_values += [
+                        f.get("name"),
+                        f.get("percentage"),
+                        f.get("is_individual"),
+                        f.get("pinfl"),
+                    ]
+                row_values += [""] * ((max_founders - len(founders)) * 4)
+                for tm in trademarks:
+                    row_values += [tm.get("transliteration")]
+                row_values += [""] * (max_trademarks - len(trademarks))
+                for conn in conn_rows:
+                    row_values += [
+                        conn.get("inn"),
+                        conn.get("name"),
+                        conn.get("director"),
+                    ]
+                row_values += [""] * ((max_connections - len(conn_rows)) * 3)
+            else:
+                row_values = [""] * len(all_columns)
+                row_values[0] = inn
+
+            ws_out.append([v if (v is not None and v != "") else "—" for v in row_values])
+
+        _format_sheet(ws_out, all_columns)
+
+        customs_in_chunk = sum(len(c) for _, _, _, _, _, c in chunk)
+        if customs_in_chunk > 0:
+            ws_customs = wb_out.create_sheet("Таможенные декларации")
+            ws_customs.append(customs_headers)
+            for inn, _, _, _, _, customs in chunk:
+                for row in customs:
+                    flat_row = _flatten_customs_row(inn, row)
+                    ws_customs.append([
+                        flat_row.get(k) if flat_row.get(k) not in (None, "") else "—"
+                        for k in customs_keys
+                    ])
+            _format_sheet(ws_customs, customs_headers)
+
+        if n_files > 1:
+            filename = f"result_part_{file_idx + 1}_of_{n_files}.xlsx"
         else:
-            row_values = [""] * len(all_columns)
-            row_values[0] = inn  # inn is first column
+            filename = "result.xlsx"
 
-        ws_out.append([v if (v is not None and v != "") else "—" for v in row_values])
+        file_path = str(Path(output_dir) / filename)
+        wb_out.save(file_path)
+        size_mb = os.path.getsize(file_path) / 1024 / 1024
+        logger.info("Wrote %s (%d rows, %.1f MB)", file_path, chunk_end - chunk_start, size_mb)
+        written.append(file_path)
 
-    _format_sheet(ws_out, all_columns)
-
-    customs_total = sum(len(c) for _, _, _, _, _, c in raw_results)
-    if customs_total > 0:
-        ws_customs = wb_out.create_sheet("Таможенные декларации")
-        customs_headers = [h for _, h in CUSTOMS_SHEET_COLUMNS]
-        customs_keys = [k for k, _ in CUSTOMS_SHEET_COLUMNS]
-        ws_customs.append(customs_headers)
-        for inn, _, _, _, _, customs in raw_results:
-            for row in customs:
-                flat_row = _flatten_customs_row(inn, row)
-                ws_customs.append([
-                    flat_row.get(k) if flat_row.get(k) not in (None, "") else "—"
-                    for k in customs_keys
-                ])
-        _format_sheet(ws_customs, customs_headers)
-
-    wb_out.save(output_path)
-    return total
+    return total, written
 
 
 def _format_sheet(ws, columns: list[str]):

@@ -28,6 +28,12 @@ MESSAGES = {
         "error": "Ошибка при обработке: {error}",
         "no_inns": "В указанном столбце не найдено ни одного ИНН.",
         "no_inns_in_text": "В сообщении не найдено ни одного ИНН (ожидаются 9 цифр). Напиши ИНН текстом или пришли Excel-файл.",
+        "file_too_large": (
+            "Файл {name} ({size} МБ) превышает лимит Telegram (48 МБ) и не может быть отправлен.\n"
+            "Он сохранён на сервере:\n`{path}`\n"
+            "Скачай его через scp/SFTP или попроси админа."
+        ),
+        "send_failed": "Не удалось отправить {name}: {error}\nФайл сохранён: `{path}`",
         "cancelled": "Отменено.",
         "using_column": "Использую столбец {col}. Начинаю обработку...",
     },
@@ -60,6 +66,12 @@ MESSAGES = {
         "error": "Ishlov berishda xatolik: {error}",
         "no_inns": "Ko'rsatilgan ustunda INN topilmadi.",
         "no_inns_in_text": "Xabarda INN topilmadi (9 raqam kutilmoqda). INN ni matn bilan yozing yoki Excel fayl yuboring.",
+        "file_too_large": (
+            "Fayl {name} ({size} MB) Telegram limitidan (48 MB) oshib ketdi.\n"
+            "Serverda saqlangan:\n`{path}`\n"
+            "scp/SFTP orqali yuklab oling yoki admindan so'rang."
+        ),
+        "send_failed": "{name} yuborilmadi: {error}\nFayl saqlangan: `{path}`",
         "cancelled": "Bekor qilindi.",
         "using_column": "{col} ustuni ishlatilmoqda. Ishlov boshlanmoqda...",
     },

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -28,6 +29,36 @@ from processor import (
 )
 
 INN_PATTERN = re.compile(r"\b\d{9}\b")
+OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", "/data/output"))
+TELEGRAM_MAX_FILE_MB = 48
+
+
+def _new_output_dir(stem: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", stem)[:60] or "run"
+    out = OUTPUT_ROOT / f"{safe}_{int(time.time())}"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+async def _send_files(update, context, files: list[str]):
+    for file_path in files:
+        name = os.path.basename(file_path)
+        size_mb = os.path.getsize(file_path) / 1024 / 1024
+        logger.info("Sending %s (%.1f MB)", file_path, size_mb)
+        if size_mb > TELEGRAM_MAX_FILE_MB:
+            logger.error("%s exceeds Telegram limit (%.1f MB)", name, size_mb)
+            await update.message.reply_text(
+                t(context, "file_too_large", name=name, size=round(size_mb, 1), path=file_path)
+            )
+            continue
+        try:
+            with open(file_path, "rb") as f:
+                await update.message.reply_document(document=f, filename=name)
+        except Exception as e:
+            logger.exception("Failed to send %s", file_path)
+            await update.message.reply_text(
+                t(context, "send_failed", name=name, path=file_path, error=e)
+            )
 
 load_dotenv()
 
@@ -148,9 +179,7 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = context.user_data["status_msg"]
 
     stem = Path(filename).stem
-    suffix = Path(filename).suffix or ".xlsx"
-    output_filename = f"{stem}_updated{suffix}"
-    output_path = str(Path(tmpdir) / output_filename)
+    output_dir = _new_output_dir(stem)
     last_reported = [0]
 
     async def progress(current: int, total: int):
@@ -158,24 +187,26 @@ async def run_processing(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_reported[0] = current
             try:
                 await msg.edit_text(t(context, "processing", current=current, total=total))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("edit progress failed: %s", e)
 
     try:
-        count = await process_excel(input_path, output_path, col_idx, progress)
+        count, files = await process_excel(input_path, str(output_dir), col_idx, progress)
         try:
             await msg.edit_text(t(context, "done", count=count))
-        except Exception:
-            pass
-        with open(output_path, "rb") as f:
-            await update.message.reply_document(document=f, filename=output_filename)
+        except Exception as e:
+            logger.warning("edit done failed: %s", e)
+        await _send_files(update, context, files)
     except asyncio.CancelledError:
         pass
     except ValueError:
         await msg.edit_text(t(context, "no_inns"))
     except Exception as e:
         logger.exception("Processing error")
-        await msg.edit_text(t(context, "error", error=e))
+        try:
+            await msg.edit_text(t(context, "error", error=e))
+        except Exception:
+            pass
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -192,9 +223,7 @@ async def handle_text_inns(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_text(t(context, "processing", current=0, total=len(inns)))
-    tmpdir = tempfile.mkdtemp()
-    output_filename = f"inn_lookup_{len(inns)}.xlsx"
-    output_path = str(Path(tmpdir) / output_filename)
+    output_dir = _new_output_dir(f"text_{len(inns)}")
     last_reported = [0]
 
     async def progress(current: int, total: int):
@@ -202,22 +231,22 @@ async def handle_text_inns(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_reported[0] = current
             try:
                 await msg.edit_text(t(context, "processing", current=current, total=total))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("edit progress failed: %s", e)
 
     try:
-        count = await process_inns(inns, output_path, progress)
+        count, files = await process_inns(inns, str(output_dir), progress)
         try:
             await msg.edit_text(t(context, "done", count=count))
-        except Exception:
-            pass
-        with open(output_path, "rb") as f:
-            await update.message.reply_document(document=f, filename=output_filename)
+        except Exception as e:
+            logger.warning("edit done failed: %s", e)
+        await _send_files(update, context, files)
     except Exception as e:
         logger.exception("Processing error (text)")
-        await msg.edit_text(t(context, "error", error=e))
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        try:
+            await msg.edit_text(t(context, "error", error=e))
+        except Exception:
+            pass
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

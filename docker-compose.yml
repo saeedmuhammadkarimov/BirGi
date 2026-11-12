@@ -4,8 +4,10 @@ services:
     container_name: birgi-bot
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - ./output:/data/output
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "50m"
+        max-file: "5"

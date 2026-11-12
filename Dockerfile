@@ -11,5 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY processor.py bot.py messages.py ./
 
+RUN mkdir -p /data/output
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "-u", "bot.py"]
